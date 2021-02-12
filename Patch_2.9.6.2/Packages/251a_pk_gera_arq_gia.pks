@@ -1,0 +1,1204 @@
+create or replace package csf_own.pk_gera_arq_gia is
+
+-------------------------------------------------------------------------------------------------------
+-- Especificação do pacote de Geração do Arquivo da GIA
+-------------------------------------------------------------------------------------------------------
+--
+-- Em 10/02/2021    - Wendel Albino - 2.9.6-2 / 2.9.5-5 / 2.9.7
+-- Redmine #76009   - Montagem dos itens 120 e 999 do registro 30
+-- Rotina Alterada  - pkb_gera_arq_gia_sc -> os Registro 30 / '09' Quadro/ itens 120 e 999 quando zerados ,devem ser enviados no arquivo
+--
+-- Em 09/02/2021    - Thiago Denadai - 2.9.6-2 / 2.9.5-5 / 2.9.7 (wendel sincronizou)
+-- Redmine #76025   - Informações de diferencial de alíquota na Dime Santa Catarina
+-- Rotina Alterada  - pkb_gera_arq_gia_sc -> Foi necessário criar 2 novos cursores utilizando a mesma metodologia da NFe para o CTe, onde os cursores são: 
+--					-  c_ct_infor_fiscal e c_ct_dif_aliq e feita a inclusão dos valores de diferencial de alíquota 
+--					-  para parar de somar o registro anterior, devido ao caso do cursor de ct_inf_prov já trazer o valor acumulado.
+--					-  No cursor de nota fiscal que traz as informações foi preciso alterar dentro do else da vn_param_difal,
+--					-  para que a acumulação do valor quando é pela itemnf_dif_aliq não gere conflito com da inf_prov_docto_fiscal e alterar 
+--					-  o valor passado na vt_bi_tab_tp22(1)(vn_cfop).dif_aliq.
+--
+-- Em 02/02/2021    - Wendel Albino - 2.9.6-2 / 2.9.5-5 / 2.9.7
+-- Redmine #75606   - Registros da DIME sendo montados com valores incorretos
+-- Rotina Alterada  - pkb_gera_arq_gia_sc -> alteracao valor do Registro 30 / '09' Quadro/ item '999'. Passa a receber o MESMO valor do
+--                  -  Registro 30 - Cálculo do Imposto a Pagar ou Saldo Credor - Saldo devedor/ Quadro '09'/Item '120'.e se ambos estiverem zerados nao é pra gerar o registro.
+--                  - alterado o if do cursor "c_obrig_rec_apur_icms" que passa a validar se: 
+--                  -  o tipo de recolhimento = 1 E o valor do item 999 / Registro 30 / '09' Quadro for <=0 nao gera o registor.
+--
+-- Em 29/01/2021    - Wendel Albino 
+-- Redmine #75663   - "Tipo" GIAM TO sendo montado como "retificação" incorretamente
+-- Rotina Alterada  - pkb_gera_arq_gia_to ->-- alterada a recuperacao do campo retificacao de "lpad(gt_row_abertura_gia.dm_tipo_gia, 2, 0)" para "vv_retificacao"
+--                  - que sera usado em todos os blocos da gia-TO por ter a particularidade de entender que quando o tipo_gia for = '01' deve assumir '00' senao o validador entende que é uma retificacao.
+--
+-- Em 21/12/2020    - Luis Marques - 2.9.5-5 / 2.9.6-2 / 2.9.7
+-- Redmine #59973   - Correção da Gia considerando parametro ORIGEM_DADO_PESSOA
+-- Rotina Alterada  - pkb_gera_arq_gia_ba, pkb_gera_arq_gia_ms, pkb_gera_arq_gia_pe, pkb_gera_arq_gias_sc,
+--                    pkb_valida - Incluido leitura dos dados do documento fiscal "ORIGEM_DADO_PESSOA" se 
+--                    estiver como "DOCUMENTO_FISCAL" se estiver como "CADASTRO_PESSOA" le os dados do 
+--                    cadastro da 'pessoa_id' do documento. 
+--
+-- Em 21/01/2021 - Renan Alves 
+-- Redmine #75224 - Segmento J Sendo Montado Incorretamente
+-- Foi incluído uma verificação nas variáveis gv_num_tare e gv_dt_vencimento para que
+-- seja realizado a montagem do segmento J.
+-- Rotina: pkb_gera_arq_gia_to 
+-- Patch_2.9.6.1 / Patch_2.9.5.4 / Release_2.9.7 
+--
+-- Em 18/01/2021    - João Carlos - 2.9.5-4 / 2.9.6-1 / 2.9.7
+-- Redmine #73913   - DIPAM - Totalizar valores do 2.2 no código 3.1
+-- Rotina Alterada  - pkb_gera_arq_gia_sp -> Criação de rotina para exportação do CodDIP 3.1 da DIPAM - registro CR30, exportação será realizada
+--                  - se o parâmetro geral do sistema estiver habilitado com "S".
+--
+-- Em 25/01/2021    - Wendel Albino - 2.9.6-1 / 2.9.5-4 / 2.9.7
+-- Redmine #74544   - Ajuste para deduzir valores na DIPAM
+-- Rotina Alterada  - pkb_gera_arq_gia_sp -> alterado select do cursor c_cr_30_nf para quando um cfop for usado pra uma finalidade diferente do seu cadastro.
+--                  - ex: usar um cfop 1949 com a finalidade de devolucao abatendo os valores ,
+--                  -   sendo que o tipo de operacao dele é 9-outras. 
+--
+-- Em 06/01/2021    - Wendel Albino - 2.9.4-6 / 2.9.5-3 / 2.9.6
+-- Redmine #72920   - Extrema demora na geração da GIA
+-- Rotina Alterada  - pkb_gera_arq_gia_sp -> alterado select do cursor c_cr_30_nf. Alterado posicionamento do round e 
+--                  -                        da chamada da pk_csf_gia.fkg_dipam_22_pessoa_juridica no subselect.
+--
+-- Em 05/01/2021    - Wendel Albino - 2.9.5-4 / 2.9.6-1 / 2.9.7
+-- Redmine #74670   - GIAM-TO - Erros de estrutura no segmento A
+-- Rotina Alterada  - pkb_gera_arq_gia_to -> inclusao de nvl nas colunas que podem ser nulas trazendo branco ou zero no cursor c_segmento_A01.
+--                  -                        retirado ltrim dos campos abaixo do segmento A e J: vt_tab_segm_A(1).NumeroTare ,vt_tab_segm_A(1).DtVencimTare 
+--
+-- Em 22/12/2020    - Wendel Albino - 2.9.4-6 / 2.9.5-3 / 2.9.6
+-- Redmine #74547   - Processo não está montando a DIPAM para CTe
+-- Rotina Alterada  - pkb_gera_arq_gia_sp -> alterada select do cursor c_cr_30_ct de CTE incluindo a stabelas ct_reg_anal e cfop , bem como os filtros de seus ids, 
+--                  - para buscar o cfop correto dos ctes.
+--
+-- Em 27/11/2020  - Wendel Albino - 2.9.4-6 / 2.9.5-3 / 2.9.6
+-- Redmine #72885 - Diferença nos valores da DIPAM 2.2 - GIA X Resumo de documentos Fiscais
+-- Rotina Alterada- pkb_gera_arq_gia_sp -> alterada posicao do ROUND no cursor c_cr_30_nf para depois do calculo 
+--
+-- Em 23/10/2020   - Luis Marques - 2.9.5-2 / 2.9.6
+-- Redmine #72624  - CÓDIGO 2.5 - DIPAM - SENDO GERADO INCORRETAMENTE
+-- Rotina Alterada - pkb_gera_arq_gia_sp - Mudei a linha: if nvl(rec.valor, 0) < 0 then ; para if nvl(rec.valor, 0) <= 0 then,
+--                   incluido leitura do parametro de geração do registro 2.5 zerado ou negativo com R$ 0,01 simbolico.
+--
+-- Em 17/09/2020   - Karina de Paula
+-- Redmine #71308  - DIPAM - Devoluções maiores que as vendas
+-- Rotina Alterada - pkb_gera_arq_gia_sp => Mudei a linha: vn_valor_mun := '0.01'; para vn_valor_mun := '0,01';
+-- Liberado        - Release_295, Patch_2.9.4.3 e Patch_2.9.3.6
+--
+-- Em 02/09/2020   - Karina de Paula
+-- Redmine #70335  - DIPAM - Devoluções maiores que as vendas
+-- Rotina Alterada - pkb_gera_arq_gia_sp => Se o valor for negativo irá receber 0.01 para q o município seja listado no rateio simbólico
+-- Liberado        - Release_295, Patch_2.9.4.3 e Patch_2.9.3.6
+--
+-- Em 21/08/2020 - Armando / Igor 
+-- Redmine #69016 - Calculo campos 71,72 e 89 DAPI
+--                  Realizar correção no calculo dos campos 71,72 e 89 DAPI -MG
+-- Rotina: fkb_recup_ident_lin
+-- Patch_2.9.4.2 / Release_2.9.5 
+--  
+-- Em 07/08/2020 - Renan Alves 
+-- Redmine #70142 - CR14 - GIA SP
+-- Foi incluido uma verificação para quando o CFOP for interestadual e o emitente e destinatário forem do 
+-- mesmo estado. Para esses casos, deverá ser considerado as informações da tabela NOTA_FISCAL_LOCAL.
+-- Rotina: pkb_gera_arq_gia_sp
+-- Patch_2.9.4.2 / Patch_2.9.3.5 / Release_2.9.5 
+--
+-- Em 06/08/2020 - Renan Alves
+-- Redmine #69132 - Ajustes de geração - GIAM-TO
+-- Foi realizado uma correção no select do cursor referente ao segmento E, incluindo um (* 100)
+-- em todas as colunas que recuperam valores númericos 
+-- Rotina: pkb_gera_arq_gia_to
+-- Patch_2.9.4.2 / Patch_2.9.3.5 / Release_2.9.5
+--
+-- Em 24/07/2020 - Renan Alves   
+-- Redmine #69744 - Erro CR30 - GIA 
+-- Foi incluído uma verificação no cursor C_CR_30_CT, onde é checado se a coluna VLR_PART_1 encontra-se com 
+-- valor zerado, pois, caso a coluna esteja com valor zerado não poderá ser montado o CR30. 
+-- Rotina: pkb_gera_arq_gia_sp      
+-- Patch_2.9.4.1 / Patch_2.9.3.5 / Release_2.9.5      
+--
+-- Em 13/07/2020   - Luis Marques - 2.9.3-5 / 2.9.4-2 / 2.9.5
+-- Redmine #69305  - Ajuste na cidade de rateio do destinatário
+-- Rotina alterada - pkb_gera_arq_gia_sp - alterado os cursores (C_CR_30_NF_VIA2 e C_CR_30_NF, C_CR_30_CT) para
+--                   verificar o parametro "ORIGEM_DADO_PESSOA" e se estiver como "DOCUMENTO_FISCAL" lê a cidade
+--                   do destinatário se estiver como "CADASTRO_PESSOA"(padrão) lê os dados do cadastro da pessoa
+--                   constante do documento.
+--
+-- Em 10/07/2020   - Luis Marques - 2.9.3-5 / 2.9.4-2 / 2.9.5
+-- Redmine #68652  - DIPAM - Melhorias/Correções
+-- Rotina alterada - pkb_gera_arq_gia_sp - alterado os cursores (C_CR_30_NF_VIA2 e C_CR_30_NF) para verificar
+--                   se o documento for de pessoa jurídica e o codigo DIPAM for "2.2" se o novo parametro geral 
+--                   do sistema "DIPAM_22_PESSOA_JURIDICA" está ativo a nota é considerada caso contrario a nota 
+--                   não entra para a DIPAM.
+--
+-- Em 24/07/2020 - Renan Alves    
+-- Redmine #69132 - Ajustes de geração - GIAM-TO
+-- Rotina: pkb_gera_arq_gia_to      
+-- Patch_2.9.4.1 / Patch_2.9.3.5 / Release_2.9.5      
+--
+-- Em 24/07/2020 - Renan Alves   
+-- Redmine #69744 - Erro CR30 - GIA 
+-- Foi incluído uma verificação no cursor C_CR_30_CT, onde é checado se a coluna VLR_PART_1 encontra-se com 
+-- valor zerado, pois, caso a coluna esteja com valor zerado não poderá ser montado o CR30. 
+-- Rotina: pkb_gera_arq_gia_sp      
+-- Patch_2.9.4.1 / Patch_2.9.3.5 / Release_2.9.5      
+--
+-- Em 16/07/2020  - Wendel Albino
+-- Redmine #69610 - Geração do CFOP 5927 - GIA SP
+-- Rotina Alterada- pkb_gera_arq_gia_sp  -> retirado o cfop 5927 dos (not in) para que aparece na geracao da gia sp 
+--                -   por ter sido alterado leyout a aprtir de 2016.
+--
+-- Em 13/07/2020   - Luis Marques - 2.9.3-4 / 2.9.4-1 / 2.9.5
+-- Redmine #69305  - Ajuste na cidade de rateio do destinatário
+-- Rotina alterada - pkb_gera_arq_gia_sp - alterado os cursores (C_CR_30_NF_VIA2 e C_CR_30_NF, C_CR_30_CT) para
+--                   verificar o parametro "ORIGEM_DADO_PESSOA" e se estiver como "DOCUMENTO_FISCAL" lê a cidade
+--                   do destinatário se estiver como "CADASTRO_PESSOA"(padrão) lê os dados do cadastro da pessoa
+--                   constante do documento.
+--
+-- Em 10/07/2020   - Luis Marques - 2.9.3-4 / 2.9.4-1 / 2.9.5
+-- Redmine #68652  - DIPAM - Melhorias/Correções
+-- Rotina alterada - pkb_gera_arq_gia_sp - alterado os cursores (C_CR_30_NF_VIA2 e C_CR_30_NF) para verificar
+--                   se o documento for de pessoa jurídica e o codigo DIPAM for "2.2" se o novo parametro geral 
+--                   do sistema "DIPAM_22_PESSOA_JURIDICA" está ativo a nota é considerada caso contrario a nota 
+--                   não entra para a DIPAM.
+--
+-- Em 07/07/2020 - Marcos Ferreira
+-- Distribuições: 2.9.4
+-- Redmine #66051: Vincular guia das apurações em tabela padrão
+-- Rotinas Alteradas: pkb_gera_arq_gia_sc
+-- Alterações: Adequação a nova estrutura de tabela
+--
+-- Em 01/07/2020 - Armando / Igor   
+-- Redmine #68813 - Não está somando FCP no ICMS -DAC Alagoas
+-- Foi retirado a multiplicação das variáveis vn_ICMSCobradoST e vn_Outros_Produtos.
+-- Rotina: pkb_monta_estr_arq_gia_al      
+-- Patch_2.9.3.4 / Release_2.9.4.1 / 2.9.5
+--
+-- Em 22/05/2020 - Renan Alves   
+-- Redmine #67483 - Erro nos totalizadores da GIA-ST
+-- Foi retirado a multiplicação das variáveis vn_ICMSCobradoST e vn_Outros_Produtos.
+-- Rotina: pkb_gera_arq_gia_sp      
+-- Patch_2.9.3.2 / Patch_2.9.2.5 / Release_2.9.4      
+--
+-- Em 12/05/2020 - Luis Marques - 2.9.2-5 / 2.9.3-2 / 2.9.4
+-- Redmine #67353 - GIA-SP com FCP
+-- Rotina Alterada: pkb_gera_arq_gia_sp - Voltando a somar o FCP para GIA de SP.
+--
+-- Em 10/04/2020 - Renan Alves   
+-- Redmine #66312 - Valores incorretos no DIPAM
+-- Foi alterado o select do cursor (C_CR_30_NF) que recupera os valores referente
+-- ao DIPAM, incluindo os valores referentes ao item. E dentre esses valores, foi realizado
+-- uma alteração para que os CFOPs de devolução sejam descontado dos demais.
+-- Rotina: pkb_gera_arq_gia_sp      
+-- Patch_2.9.3.2 / Patch_2.9.2.5 / Release_2.9.4      
+--
+-- Em 27/03/2020 - Renan Alves  
+-- Redmine #65839 - Valores de IPI e ICMS-ST na GIA
+-- Foram incluidas duas verificações onde verifica se o valor do imposto retido 
+-- substituido st (VN_IMP_RET_SUBSTITUIDO_ST) e valor outros impostos (vn_outros_impostos)
+-- serão descontados da base de cálculo outra do ICMS (VN_VL_BC_OUTRA_ICMS).
+-- Rotina: pkb_gera_arq_gia_sp    
+-- Patch_2.9.2-3 / Patch_2.9.1-6 / Release_2.9.3   
+--
+-- Em 23/03/2020 - Renan Alves 
+-- Redmine #65686 - Novo Ajustes - GIAM-TO
+-- Foi alterado o cursor do Segmento K (C_SEGMENTO_K01), incluindo a tabela (SUBITEM_GIA) 
+-- código de sub-Item da GIA, para que seja enviado o código da ocorrência
+-- Rotina: pkb_gera_arq_gia_to    
+-- Patch_2.9.2-3 / Patch_2.9.1-6 / Release_2.9.3 
+--
+-- Em 19/03/2020 - Luis Marques - 2.9.1-6 / 2.9.2-3 / 2.9.3
+-- Redmine #65994 - GIA-SP não considerando valor de FCP no valor de imposto tributado
+-- Rotina alterada: pkb_gera_arq_gia_sp - Somado valor do FCP no total do imposto para GIA-SP conforme solicitado.
+--
+-- Em 17/03/2020 - Renan Alves  
+-- Redmine #66077 - Erro regitro 30 - Saldo Credor de ICMS
+-- Foi incluido o valor do ICMS a pagar (VL_ICMS_RECOLHER) no IF que gera o item 120 do registro 30 quadro 09
+-- Rotina: pkb_gera_arq_gia_sc   
+--
+-- Em 17/03/2020 - Renan Alves
+-- Redmine #66074 - Erro registro 20 - mês referencia
+-- Foi alterado a geração da abertura, incluido as informações do registro 21
+-- Rotina: pkb_gera_reg_dime   
+--
+-- Em 16/03/2020 - Renan Alves
+-- Redmine #66008 - IPI duplicado em base outras e outros impostos na GIA SP
+-- Foi incluido uma tratativa para a geração do VN_VL_BC_OUTRA_ICMS, verificando os parâmetros
+-- "Forma de geração de base Isenta e Outras" e "Somar os valores de impostos de ICMS-ST e IPI não recuperado na base de cálculo outras de ICMS"
+-- Rotina: pkb_gera_arq_gia_sp   
+--
+-- Em 20/02/2020 - Renan Alves
+-- Redmine #63819 - Erro registro 21 - Valor de itens
+-- Foi implementado a criação da abertura DIME (DET_DIME) do mês anterior 
+-- Rotina: pkb_gera_reg_dime  
+--
+-- Em 17/02/2020 - Renan Alves
+-- Redmine #64561 - Diferença de valores GIA X apuração de ICMS
+-- Foi incluído uma tratativa para quando os valores das bases forem igual ao da operação (vn_vl_contabil).
+-- Rotina: pkb_gera_arq_gia_sp
+--
+-- Em 11/02/2020 - Renan Alves
+-- Redmine #62742 - Ajuste de valores - GIAM-TO
+-- Foi incluído o tipo utilização (DM_UTIL) outros débitos no segmento R
+-- Rotina: pkb_gera_arq_gia_to
+--
+-- Em 05/05/2020 - Renan Alves
+-- Redmine #62742 - Ajuste de valores - GIAM-TO
+-- Foi ajustado o segmento D, para que o mesmo seja montado dentro do segmento B.
+-- Rotina: pkb_gera_arq_gia_to
+--
+-- Em 30/01/2019 - Renan Alves
+-- Redmine #63809 - Erro registro 32 - Crédito de ICMS-ST (DCIP)
+-- Foi alterado o valor do item 075 do registro 30, quadro 09. Alterando a variável para vn_tp30_075_valor.
+-- Foi criado o item 105 do registro 32, quadro 11.
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 29/01/2019 - Renan Alves
+-- Redmine #63629 - Erro registro 30 - Ordenação dos itens
+-- Foi realizado a ordenação dos itens do registro 30.
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 28/01/2019 - Renan Alves
+-- Redmine #63967 - Itens do quadro 14 - arredondando casa decimais
+-- Foi incluido uma validação para valores alfanumérico, informado no campo conteudo e
+-- tratado os valores com casas decimais, para os itens do registro 35.
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 22/01/2019 - Renan Alves
+-- Redmine #52993 - Consumo KW/h - DMA(GIA-BA)
+-- Foi incluido um select para recuperar o consumo KW/h, que é recuperado da nova tabela
+-- de informações complemtares da GIA (INF_COMP_GIA)
+-- Rotina: pkb_gera_arq_gia_ba
+--
+-- Em 21/01/2019 - Renan Alves
+-- Redmine #63608 - Mapeamento - Código de Receita X Classe Vencimento
+-- Foi criado a função fkg_ret_classe_vencto_dime.
+-- Foi alterado a geração da classe de vencimento do registro 33.
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 20/01/2019 - Renan Alves
+-- Redmine #63217 - Erro segmento D - Gia TO
+-- Foi alterado o cursor do segmento D, onde foi incluido um unio com as informações do conhecimento
+-- de transporte, para que seja contemplados os documentos fiscais do tipo de serviços contínuos
+-- '06', '21', '22', '29' e conhecimento de transporte.
+-- Rotina: pkb_gera_arq_gia_to
+--
+-- Em 30/12/2019 - Renan Alves
+-- Redmine #63094 - Erro regitro 32 - Totalizar créditos
+-- Foi incluido a variável do item 115 do registro 32, na soma do item 130 do registro 32.
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 27/12/2019 - Renan Alves
+-- Redmine #63097 - Erro regitro 32 - Incluir registro 170
+-- Foi criado o item 170 do registro 32, quadro 11.
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 24/12/2019 - Renan Alves
+-- Redmine #62741 - Ajuste de valores - GIAM-TO
+-- No segmento S, no select foi incluido o valor contábil.
+-- No segmento A, foi realizado a correção dos valores que estavam sendo enviados sem as casas decimais.
+-- Rotina: pkb_gera_arq_gia_to
+--
+-- Em 13/12/2019 - Luis Marques
+-- Redmine #50385 - Escrituração Fiscal a fim atender Notas Fiscais com Antecipação de Crédito de ICMS
+-- Rotina alterada: pkb_gera_arq_gia_mg - Verificação não necessária pois o registro correspondente não está sendo enviado,
+--                  no registro 109 foi colocado o total da Antecipação de Crédito de ICMS e totalizado no registro 110,
+--
+-- Em 06/12/2019 - Renan Alves
+-- Redmine #62176 - Registro 80 e 90 - Itens 10, 20 e 30
+-- Foi alterado a forma de geração dos registros 80 e 90, permitindo que seja gerados os itens 10, 20 e 30
+-- mesmo que encontrem com valor zerado.
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 03/12/2019 - Renan Alves
+-- Redmine #61016 - DIME - Ajustes nos contadores (98 e 99)
+-- Foi incluido um contador (VN_QTDE) em cada registro para que seja somado nos registros 98 e 99.
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 03/12/2019   - Karina de Paula
+-- Redmine #61725  - Erro no CRC do contador (DAC - AL)
+-- Rotina Alterada - pkb_gera_arq_gia_al => Alterada o valor retornado na variável vv_num_crc_cont
+--                   Antigo: upper(trim(substr(co.crc, 2, 10))) / Novo: upper(trim(substr(co.crc, 1, 10)))
+--
+-- Em 28/11/2019 - Renan Alves
+-- Redmine #61437 - Ajustes GIAM-TO - Segmento B
+-- Foram corrigidos os pontos encontrados.
+-- Rotina: pkb_gera_arq_gia_to
+--
+-- Em 28/11/2019 - Renan Alves
+-- Redmine #61832 - Geração do registro 32
+-- Foi incluído um * 100 na coluna de valor dos itens do registro 32.
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 26/11/2019 - Renan Alves
+-- Redmine #61442 - Geração dos registros 22, 23 e 24
+-- Foram alterados os itens 53, 54, 103 e 104 do registro 24. Alterando o lugar de onde era recuperado
+-- os valores, para informar nos itens.
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 20/11/2019 - Renan Alves
+-- Redmine #61095 - Erro Registro 125 - DAPI MG
+-- Conforme com a nova emenda a partir do período de referencia 05/2019, os campos 71.1 e 74.1 estarão
+-- desabilitados e como o campo 125 corresponde ao campo, o mesmo será enviado com o valor zerado
+-- Rotina: pkb_gera_arq_gia_mg
+--
+-- Em 19/11/2019 - Luis Marques
+-- Redmine #50385 - Escrituração Fiscal a fim atender Notas Fiscais com Antecipação de Crédito de ICMS
+-- Rotina alterada: pkb_gera_arq_gia_mg - verificação se a nota é de antecipação de credito não entra para DAPI de MG.
+--
+-- Em 14/11/2019 - Eduardo Linden
+-- Redmine #61257 - Ajuste na geração do CR 30 da GIA SP
+-- Ajuste no cursor c_cr_30_nf receberá order by pelos campos coddip_empresa,municipio_empresa
+-- Rotina: pkb_gera_arq_gia_sp
+--
+-- Em 13/11/2019 - Renan Alves
+-- Redmine #61113 - Processo do registro 25
+-- Foi criado uma tratativa, onde é verificado de qual forma será montado o registro 25
+-- a partir do parâmetro PARAM_EFD_ICMS_IPI.DM_LCTO_DIFAL
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 07/11/2019 - Renan Alves
+-- Redmine #55401 - DIME - Registros 80 a 84
+-- Criação do processo de geração dos registros 80 ao 84 e 90 ao 94.
+-- Rotina: pkb_gera_reg_dime_comp
+--
+-- Em 05/11/2019 - Renan Alves
+-- Redmine #60815 - DIME - Registros 35
+-- Foi realizado uma tratativa no registro 35, onde só será permitido a geração do registro quando houver
+-- informações no campo conteúdo
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 01/11/2019 - Renan Alves
+-- Redmine #60569 - Debug - DIME - ST
+-- Foi realizado uma tratativa nos registros 32, 33, 35, 41, 42, 46, 49 e 50 para informações
+-- com valores zerados não sejam gerados no arquivo.
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 28/10/2019 - Renan Alves
+-- Redmine #60381 - Segmento S - DIFAL Saída
+-- Foi alterado a coluna diferencial alíquota, onde estava sendo realizado uma subtração para a soma.
+-- Rotina: pkb_gera_arq_gia_to
+--
+-- Em 16/10/2019 - Marcos Ferreira
+-- Redmine #60041 - Erro GIA - CR31
+-- Alterações: Alterado o Cursor c_ie, incluído ie.dm_st_proc = 1 para buscar somente registros validados
+--             e and trim(ie.nro_re)    is not null no segundo union
+-- Rotina: pkb_gera_arq_gia_sp
+--
+-- Em 04/10/2019 - Renan Alves
+-- Redmine #59342 - Alterar a geração do CR_30 - código 2.5
+-- Foi alterado o select do cursor C_CR_30_NF, alterando o case para que seja recuperado o EMPRESA_ID
+-- da cidade que está gerando o arquivo
+-- Rotina: pkb_gera_arq_gia_sp
+--
+-- Em 01/10/2019 - Renan Alves
+-- Redmine #59471 - Orientações de geração recebidas do cliente
+-- Foi realizado um ajuste no segmento S, criando um sub-select e agrupando algumas colunas, pois, é permitido
+-- apenas um registro por UF com seus devidos valores
+-- Rotina: pkb_gera_arq_gia_to
+--
+-- Em 20/09/2019 - Allan Magrini
+-- Redmine #58409 - Geração CR 30 - Valores incorretos (1.1 e 2.5)
+-- Ajuste no case do cursor c_cr_30_nf e criado o cursor c_cr_30_nf_via2 com base no c_cr_30_nf_via e colocada a verificação de qual c_cr_30_nf_via o sistema vai buscar a informação
+-- Rotina: pkb_gera_arq_gia_sp
+--
+-- Em 11/09/2019 - Renan Alves
+-- Redmine #58614 - Feedback após atualização - Bloco B
+-- Correção do segmento B, por estar gerando mais de uma linha para o mesmo CFOP
+-- Rotina: pkb_gera_arq_gia_to
+--
+-- Em 06/09/2019 - Renan Alves
+-- Redmine #58399 - Erros ao testar - Amazon Produção
+-- Foram realizadas algumas correções nos segmentos A, E e D.
+-- Rotina: pkb_gera_arq_gia_to
+--
+-- Em 03/09/2019 - Eduardo Linden
+-- Redmine #58282 - feed geração gia CR30
+-- Ajuste nos cursores para CR 30 da GIA-SP, troca da clausula para dm_st_proc = 1 (tabela inf_valor_agreg)
+-- Rotina: pkb_gera_arq_gia_sp
+--
+-- Em 29/08/2019 - Eduardo Linden
+-- Redmine #58204 - Ajuste na geração do CR 30 - GIA-SP
+-- Inclusão da clausula dm_st_proc =2 (tabela inf_valor_agreg) para os cursores da geração do CR 30.
+-- Rotina: pkb_gera_arq_gia_sp
+--
+-- Em 28/08/2019 - Eduardo Linden
+-- Redmine #57951 - Corrigir geração CR 30 da GIA SP
+-- Foi criado dois cursores para o CR30-DIPAM-B para Notas Fiscais, sendo um para não gerar registros relacionados à tabela inf_valor_agreg.
+-- O outro cursor gerar registros e valor utilizando a tabela inf_valor_agreg.
+-- Rotina: pkb_gera_arq_gia_sp
+--
+-- Em 15/08/2019 - Allan Magrini
+-- Redmine #57790 feed - Processo DIME
+-- Foi corrigido o cursor c_det_dime, alterada as tabelas dos campos descricao desc_registro e codigo cod_quadro para a tabela item_dime
+-- Rotina: pkb_validar_dime
+--
+-- Em 15/08/2019 - Allan Magrini
+-- Redmine #57771 - Erro ao Gerar Gia TO
+-- Foi corrigida a fase 35,1 o campo NroNotaFiscal estava sendo multiplicado por 100 e estava com tamanho de caracter 9, foi alterado para 7
+-- Rotina: pkb_gera_arq_gia_to
+--
+-- Em 15/08/2019 - Renan Alves
+-- Redmine #57024 - Realizar adequações na GIAM-TO
+-- Foram revisados os segmentos A, B, C, D, E, K, L, N, O, P, R e S
+-- Rotina: pkb_gera_arq_gia_to
+--
+-- Em 01/08/2019 - Renan Alves
+-- Redmine #56887 - Utilização da Ocorrencia da GIA para os Registro 22 e 29 da DAPI-MG
+-- Foi alterado a geração da linha (registro) 22 e 29, dentro do cursor C_DETAL_EST_DEB_CRED, foi
+-- incluído uma verificação em cima da coluna DM_UTIL, separando estorno de crédito e estorno de débito.
+-- Rotina: pkb_gera_arq_gia_mg
+--
+-- Em 01/08/2019 - Renan Alves
+-- Redmine #56871 - Atualizar Versão Dapi MG
+-- 1) Foi comentado o cursor C_AJUST_DIFAL.
+-- 2) Foi alterado foi incluído o valor 0 (zero) nas colunas NumNF, SerieNF, DtNF da vt_tab_22.
+-- Rotina: pkb_gera_arq_gia_mg
+--
+-- Em 24/07/2019 - Renan Alves
+-- Redmine #56707 - DIME - Desenvolvimento do processo de geração
+-- Foi realizado a criação do processo de geração dos registros e validação referente a DIME.
+-- Rotina: pkb_gera_reg_dime e pkb_validar_dime
+--
+-- Em 23/07/2019 - Renan Alves
+-- Redmine #56403 - TARE - Segmento J
+-- Foi implementado a criação do registro segmento J.
+-- Rotina: pkb_gera_arq_gia_to
+--
+-- Em 18/07/2019 - Renan Alves
+-- Redmine #56472 - Testes - Decimal não aparece
+-- Foi implementado o campo que recupera o valor diferimento, considerando as casas decimais.
+-- Rotina: pkb_gera_arq_gia_ba
+--
+-- Em 11/07/2019 - Renan Alves
+-- Redmine #55395 - DIME - Registros 23, 24 e 32
+-- Foi incluído a coluna NF.DM_ID_DEST no cursor C_DET_CFOP, e incluído uma verificação
+-- na geração dos valores BC_IMP_RET e IMP_RET, do registro TP23.
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 11/07/2019 - Renan Alves
+-- Redmine #55399 - DIME - Registro 30
+-- Foi criado um select que recupera o valor do totalizador (990) referente a apuração DCIP
+-- para o registro 30, item 075.
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 11/07/2019 - Renan Alves
+-- Redmine #55397 - DIME - Registro 25
+-- Foi criado cursor que recupera o valor diferencial de alíquota por CFOP (2551, 2556 e 3551),
+-- referentes aos itens 020, 030 e 040 do registro TP25.
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 21/06/2019 - Luiz Armando Azoni
+-- Redmine #55532 - Correção cursor CR30 Gia SP para CTes autorizados
+-- Adicionado a condição dm_st_proc = 4 no cursor c_cr_30_ct
+-- Rotina: pkb_gera_arq_gia_sp
+--
+-- Em 18/06/2019 - Renan Alves
+-- Redmine #52996 - DMA - Tipo 16 do Layouyt - Campo Valor diferimento
+-- Foi incluído um select que recupera o valor diferimento que deverá ser utilizado TIPO 16.
+-- Rotina: pkb_gera_arq_gia_ba
+--
+-- Em 05/06/2019 - Renan Alves
+-- Redmine #54780 - Ajustes de geração - GIAM-TO - Ajuste de geração do arquivo
+-- Foi incluído a função replace nas colunas que retornam valores numéricos nos cursores c_segmento_A02, c_segmento_A03, c_segmento_B01,
+-- c_segmento_D01, c_segmento_E01, c_segmento_K01, c_segmento_L01, c_segmento_M01, c_segmento_N01, c_segmento_O01, c_segmento_P01 e c_segmento_S01
+-- Rotina: pkb_gera_arq_gia_to
+--
+-- Em 23/04/2019 - Renan Alves
+-- Redmine #47048 - Atualização do processo de geração da DIME
+-- Criação da geração do Registro 46 - Créditos por Autorizações Especiais (TP46)
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 10/04/2019 - Renan Alves
+-- Redmine #52522 - Alteração de layout GIAM-TO
+-- Foi comentado a coluna VL_TOTAL_AJUST_CRED no cursor c_segmento_A02, pois, a mesma deve ser informada
+-- zerada no layout.
+-- Foi alterado o tamanho do lpad da coluna CIDADE_IBGE de 21 para 14 no select do cursor C_SEGMENTO_M01.
+-- Rotina: pkb_gera_arq_gia_to
+--
+-- Em 09/04/2019 - Renan Alves
+-- Redmine #53258 - ERRO AO GERAR GIA-SC
+-- Ao montar o registro TP26 onde é realizado um select no cursor C_AJUST_APURACAO a coluna VALOR encontrava-se
+-- sendo alimentada com valor incorreto
+-- Rotina: pkb_gera_arq_gia_sc
+--
+-- Em 19/02/2019 - Eduardo Linden
+-- Redmine #51687 - Correção no cursor que busca as informaçoes , contado e responsavel - Giam-TO
+-- Correção no cursor c_segmento_A01, para que os dados do contador não retornem duplicados.
+-- Procedure: pkb_gera_arq_gia_to
+--
+-- Em 12/02/2019 - Renan Alves
+-- Redmine #51117 - Atualização do processo de geração da DIME
+-- Redmine #51335 - Gerar registro tipo 33 da DIME
+-- Alterações: Registro TP22, foram incluídas três novas colunas sendo elas Base de Cálculo Imposto Retido, Imposto Retido, Diferença de Alíquota.
+--             Registro TP23, foram incluídas três novas colunas sendo elas Base de Cálculo Imposto Retido, Imposto Retido, Branco.
+--             Registro TP24, foram incluídos três blocos de entrada (053, 054, 057) e dois blocos de saída (103, 104).
+--             Registro TP26, foi incluído o registro TP26 no processo, o mesmo encontrava-se comentado.
+--             Registro TP30, foram incluídos quatro blocos (020, 060, 130, 150).
+--             Registro TP33, foi incluído o registro TP33 no processo.
+-- Procedures: pkb_gera_arq_gia_sc
+--
+-- Em 29/01/2019 - Marcos Ferreira
+-- Redmine #49524 - Funcionalidade - Base Isenta e Outros de Conhecimento de Transporte cuja emissão é própria
+-- Solicitação: Alterar a chamda da procedure pk_csf_api_d100.pkb_vlr_fiscal_ct_d100 para pk_csf_ct.pkb_vlr_fiscal_ct
+-- Procedures Alteradas: pkb_gera_arq_gia_sp
+--
+-- Em 25/01/2019 - Angela Inês.
+-- Redmine #50915 - Correção no valor do Imposto Substituto por ST incluindo FCP de Imposto ICMS-ST.
+-- Somar ao valor do Imposto Substituto por ST o valor do FCP do Imposto ICMS-ST.
+-- Rotina: pkb_gera_arq_gia_sp.
+-- Redmine #50927 - Feed - Erro ao importar a gia no validador.
+-- Somar ao valor do Imposto Substituto por ST o valor do FCP do Imposto ICMS-ST, e fazer a multiplicação por 100.
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 22/01/2018 - Angela Inês.
+-- Redmine #48915 - ICMS FCP e ICMS FCP ST.
+-- 1) Atribuir os campos referente aos valores de FCP que são retornados na função de valores do Item da Nota Fiscal (pkb_vlr_fiscal_item_nf).
+-- 2) O valor contábil passa a receber o valor retornado da função (pkb_vlr_fiscal_item_nf), vl_contabil, sem a necessidade de somar o valor do FCP do imposto ICMS-ST.
+-- Rotina: pkb_gera_arq_gia_sp.
+-- 1) Atribuir os campos referente aos valores de FCP que são retornados na função de valores do Item da Nota Fiscal (pkb_vlr_fiscal_item_nf).
+-- 2) Registro 0120 - Ao valor do imposto tributado de ICMS continua sendo somado o valor do imposto tributado de FCP do Imposto ICMS.
+-- 3) Registro 0120 - Ao valor do imposto retido de ICMS-ST somar o valor do imposto tributado de FCP do Imposto ICMS-ST.
+-- 4) Totalizar os valores de imposto FCP de ICMS e ICMS-ST.
+-- 5) Registro 0130 - Ao valor do imposto tributado de ICMS continua sendo somado o valor do imposto tributado de FCP do Imposto ICMS.
+-- 6) Registro 0130 - Ao valor do imposto retido de ICMS-ST somar o valor do imposto tributado de FCP do Imposto ICMS-ST.
+-- 7) Totalizar os valores de imposto FCP de ICMS e ICMS-ST.
+-- 8) Registro 0220 - Ao valor do imposto cobrado de ST somar o valor do imposto tributado de FCP do Imposto ICMS-ST.
+-- 9) Totalizar os valores de imposto FCP de ICMS e ICMS-ST.
+-- Rotina: pkb_gera_arq_gia_rj.
+-- 1) Atribuir os campos referente aos valores de FCP que são retornados na função de valores do Item da Nota Fiscal (pkb_vlr_fiscal_item_nf).
+-- Rotinas: pkb_gera_arq_gia_es, pkb_gera_arq_gia_rs, pkb_gera_arq_gia_al, pkb_gera_arq_gia_ba, pkb_gera_arq_gia_mg, pkb_gera_arq_gia_ms, pkb_gera_arq_gia_pe,
+-- pkb_gera_arq_gia_pr, pkb_gera_arq_gia_rn, pkb_gera_arq_gia_sc e pkb_gera_arq_gia_to.
+--
+-- Em 21/01/2019 - Marcos Ferreira
+-- Redmine #50297 - Erro de ordenação do registro 30 da GIA-SP devido a cidade
+-- Solicitação: O Validador está acusando erro de ordenação, referente ao código do municipio
+-- Alterações: Alterado o order by do cursor c_cr_30_nf, c_cr_30_ct
+-- Procedures Alteradas: pkb_gera_arq_gia_sp
+--
+-- Em 03/01/2019 - Karina de Paula
+-- Redmine #50155 - Processo de geração da GIA-SP - Registro CR14 - Conhecimento de Transporte.
+-- Rotina Alterada: pkb_gera_arq_gia_sp => Incluido no cursor c_det_cfop_ct o retorno dos campos: sigla_uf_ini; ibge_cidade_ini; sigla_uf_fim; ibge_cidade_fim
+--                                      => Retirado o select que trazia o id do estado e da cidade com base na pessoa_id
+--                                      => Incluídas as funções pk_csf.fkg_Estado_id e pk_csf.fkg_Cidade_ibge_id para trazer o id do estado e da cidade
+--
+-- Em 17/12/2018 - Angela Inês.
+-- Redmine #49767 - Correção na GIA-SP - Inclusão do valor de FCP do Imposto ICMS-ST - Valor Contábil.
+-- Ao compôr o valor contábil das Notas Fiscais Mercantis, acrescentar o valor do FCP do Imposto ICMS-ST.
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 12/12/2018 - Marcos Ferreira
+-- Redmine #49317 - Gia de São Paulo - Geração do registro CR030 considerando os conhecimentos de transporte.
+-- Solicitação: Incluir os CTes na Geração do CR30 para Gia-SP
+-- Alterações: Criado Cursor  separado para CTe e as devidas validações para o CTe no CR30
+-- Procedure Alterada: pkb_gera_arq_gia_sp
+--
+-- Em 05/12/2018 - Marcos Ferreira
+-- Redmine #48559 - Alteração Segmento P na GIA de TO - Diferencial de Aliquota
+-- Solicitação: Solicitar a exportação do Segmento P da Giam de TO apenas quando houver Diferencial de Alíquota no documento fiscal.
+-- Alterações: Removido o alter join com o diferencial de aliquota no cursor c_segmento_P01
+-- Procedures Alteradas: pkb_gera_arq_gia_to
+--
+-- Em 30/11/2018 - Angela Inês.
+-- Redmine #49269 - Alteração no processo da GIA/RJ - Valores de FCP.
+-- Somar no valor do imposto ICMS, o valor do FCP, vinculado ao imposto, para montagem do registro 0120-entradas, e 0130-saídas.
+-- Rotina: pkb_gera_arq_gia_rj.
+--
+-- Em 19/10/2018 - Angela Inês.
+-- Redmine #47973 - Correção no processo de geração da GIA-BA-DMA - Valor de Diferencial de Alíquota - Registro 15.
+-- Conforme solicitação, considerar os valores de ajustes da Apuração de ICMS, desde que os códigos de ajustes sejam de Apuração do Tipo "ICMS", e a Utilização
+-- seja "Débitos Especiais".
+-- Rotina: pkb_gera_arq_gia_ba.
+--
+-- Em 15/10/2018 - Angela Inês.
+-- Redmine #47827 - Correção na geração da DAPI-MG - Registro 00 - Dapi sem movimento.
+-- Obrigação legal: Uma declaração é considerada Sem Movimento quando todos os Campos estiverem zerados ou quando só há valores nos Campos de saldo do período
+-- anterior e de saldo para o período seguinte. No processo estamos somando todos os valores declarados no registro de tipo 10.
+-- Correção: Serão subtraídos os valores declarados no registro de tipo 10, quando a linha for 87, 87-91 e 92.
+-- Tecnicamente: 87-sdo anterior, 91-soma vários valores e utiliza o valor do 87-sdo anterior (por isso subtrair novamente o valor do 87), 92-sdo a transportar.
+-- Rotina: pkb_gera_arq_gia_mg.
+--
+-- Em 17/09/2018 - Eduardo Linden
+-- Redmine #46614 - Informação de Funcionários - DMA
+-- Para GIA - DMA BA, a informação para numero de funcionario (TP 17) passa a receber informação da tabela inf_folha_pgto.
+-- O mesmo é feito na GIA - SC (DIME).
+-- Rotina: pkb_gera_arq_gia_ba
+--
+-- Em 26/06/2018 - Angela Inês.
+-- Redmine #44438 - Correção na montagem dos registros de GIA/DAPI-MG - Registros 99, 99.1 e 99.2.
+-- Registro 99 = Registro 97 () Registro 98.
+-- Registro 99.1 deverá sair como código/linha 130, hoje o valor sairá com 0(zero).
+-- Registro 99.2 deverá sair como código/linha 131, sendo (Registro 99 () Registro 99.1(130)).
+-- Registro 104.2 deverá sair como código/linha 132, hoje o valor sairá com 0(zero).
+-- Registro 104.3 deverá sair como código/linha 133, hoje o valor sairá com 0(zero).
+-- Registro 105 = Registro 99.2(131) () Registro 100 () Registro 101 () Registro 102 () Registro 103 () Registro 104 () Registro 104.3(133).
+-- Rotina: pkb_gera_arq_gia_mg.
+--
+-- Em 22/06/2018 - Angela Inês.
+-- Redmine #44279 - Correção no valor do Registro da Linha 105.
+-- Para compôr o valor da linha 105 temos a soma dos campos: 99.2, 100, 101, 102, 103, 104 e 104.3.
+-- Hoje o processo está utilizando a soma dos campos: C099 + C100 + C101 + C102 + C103 + C104 + C0104.1(123).
+-- Rotina: pkb_gera_arq_gia_mg.
+--
+-- Em 21/06/2018 - Angela Inês.
+-- Redmine #44239 - Informação dos Valores da Linha 99.1, 99.2, 104.1 e 104.2.
+-- As linhas não devem ser informadas quando os valores estiverem zerados. Informar apenas as linhas 99 e 104.
+-- Rotina: pkb_gera_arq_gia_mg.
+--
+-- Em 28/05/2018 - Marcos Ferreira
+-- Redmine: #41961 - GIA RJ fora do layout no campo serie registro 0230 (Teadit)
+-- Rotina Corrigida: pkb_gera_arq_gia_rj
+-- Correção: Fiz a inclusão de alguns NVLs na geração do registro 0230, pois o campo Numero de Subsérie da Nota Fiscal
+--           estava vindo nulo e estava deslocando a linha para a esquerda
+--
+-- Em 11/05/2018 - Marcos Ferreira
+-- Redmine #42755: Erro Gia - TO
+-- Rotina Corigida: pkb_gera_arq_gia_to
+-- Alguns campos estavam estourando o tamanho na geração no cliente. Correção com Lpad
+--
+-- Em 09/05/2018 - Angela Inês.
+-- Redmine #42677 - Nova Versão DAPI - MG - 9.00.
+-- A DAPI apresentou uma nova versão de Layout que é válida a partir de 05/2018, onde foram acrescentados novos campos e regras.
+-- Alterações: A partir da versão 9.00.00 foram incluídos os campos 99.1; 99.2; 104.2; 104.3 e informação a respeito do Termo de Aceite no registro "Tipo da Linha=00"
+-- O campo relacionado com "Termo de Aceite" foi incluído com valor fixo "N". Os valores relacionados aos campos 99.1; 99.2; 104.2; 104.3, foram incluídos com
+-- zero(0). Eles ficam no registro Tipo 10, e identificadores de linhas 130, 131, 132 e 133.
+-- Rotina: pkb_gera_arq_gia_mg.
+--
+-- Em 03/05/2017 - Marcos Ferreira
+-- Rotina Criada: pkb_gera_arq_gia_to
+-- Redmine #42088 - Criação da Estrutura de Geração da GIAM para o Estado de Tocantis.
+-- Rotina Alterada: pkb_geracao - Inclusão da chamada da procedure pkb_gera_arq_gia_to
+--
+-- Em 03/04/2018 - Karina de Paula
+-- Rotina Alterada: pkb_gera_arq_gia_ba
+-- Redmine #41146 - ERRO GERAÇÃO DMA INVENTÁRIO
+-- Incluído o totalizador status_est_inic_final I e F, para o tipo 12 e tipo_natur_estoque = 01
+--
+-- Em 14/03/2018 - Karina de Paula
+-- Redmine #40517 - Processo de montagem da GIA -RJ
+-- Rotina Alterada: pkb_gera_arq_gia_rj
+-- Alterado o if que verifica os estados que permitem SUFRAMA para buscar pelos cds relacionados ao tipo de arquivo GIA-RJ
+-- Estados ( 11 RO Rondonia / 12 AC Acre / 13 AM Amazonas / 14 RR Roraima / 16 AP Amapa )
+-- Rotina Alterada: pkb_geracao
+-- Alterada a ordem que carrega a variável gv_mensagem - colocada depois da chamada da pkb_dados_abertura_gia que é a rotina que
+-- carrega as datas utilizadas na mensagem
+--
+-- Em 26/02/2018 - Angela Inês.
+-- Redmine #39835 - Correção na geração da GIA/BA/DMA - Registros de Inventário.
+-- Alteração o processo que recupera os valores de Inventário considerando a data inicial da abertura do arquivo da GIA (abertura_gia.dt_ini).
+-- Rotina: pkb_gera_arq_gia_ba.
+--
+-- Em 08/02/2018 - Leandro Savenhago
+-- Redmine #39014 - Erro Gia pk_gera_arq_gia.pkb_gera_arq_gia_rj fase 2.6
+-- Acertado recuperação do FONE com apenas 8 casas
+-- Rotina alterada: pkb_gera_arq_gia_rj.
+--
+-- Em 25/01/2018 - Angela Inês.
+-- Redmine #38857 - Correção na montagem da GIA/BA/DMA - Estoque inicial e final.
+-- 1) Recuperar os movimentos de inventário considerando a DT_INVENTARIO dentro do período do mês de Dezembro:
+-- - Registro inicial: DT_INVENTARIO dentro do mês de Dezembro com dois anos anteriores. Exemplo: Arquivo Fev/2018, Estoque Dez/2016.
+-- - Registro final: DT_INVENTARIO dentro do mês de Dezembro com um ano anterior. Exemplo: Arquivo Fev/2018, Estoque Dez/2017.
+-- 2) Para recuperar os valores das colunas: vl_trib_est_inic_final, vl_isentas_nao_trib e vl_outras, considerar os CSTs vinculados aos registros de Inventário
+-- (tabela: invent_cst). Para separar os valores em cada coluna deverá ser considerada a regra de CST.
+-- 3) Para recuperar o valor da coluna vl_total será necessário somar as 3 colunas: vl_trib_est_inic_final, vl_isentas_nao_trib e vl_outras.
+-- Rotina: pkb_gera_arq_gia_ba.
+--
+-- Em 18/01/2018 - Angela Inês.
+-- Redmine #38616 - Correção na geração do arquivo da GIA/DMA/BA - Valor de Base Outras.
+-- Para recuperar o valor de base outras de ICMS temos:
+-- Atual/teste/condição:
+-- Se o ((vl_operacao - vl_imp_trib_ipi) = vl_base_calc_icms), considerar:
+-- Correção/teste/condição:
+-- Se o ((vl_operacao - vl_imp_trib_ipi) = (vl_base_calc_icms + v_outras + v_isenta_nao_tributada)), considerar:
+-- Portanto, será comparado o valor da operação subtraindo o valor do imposto IPI tributado, com a soma das bases do imposto ICMS: tributada, outras e isenta.
+-- Rotina: pkb_gera_arq_gia_ba.
+--
+-- Em 17/10/2017 - Marcos Garcia
+-- Redmine #35486 - Geração da GIA-SP/CR30-DIPAM-B. Percentual de rateio de itens.
+-- Dentro da tabela de parâmetros da dipam, param_dipamgia, foi adicionado a coluna perc_rateio_item
+-- e o mesmo fara parte do cálculo do valor do item para o registro cr30 da GIA_SP.
+-- Rotina alterada: pkb_gera_arq_gia_sp.
+--
+-- Em 09/10/2017 - Angela Inês.
+-- Redmine #35338 - Correção na geração da GIA-BA - DMA - Valores de Base Outras.
+-- 1) Considerar nos valores de Base Outras, o valor do ICMS-ST, ficando:
+-- 1.1) Se o parâmetro da empresa indicar que a soma do ICMS-ST e do IPI não serão destacados na Observação do Livro Fiscal, considerar:
+-- vl_base_outras = vl_operacao - vl_base_calc_icms - vl_imp_trib_icmsst - vl_imp_trib_ipi
+-- 1.2) Se o parâmetro da empresa indicar que a soma do ICMS-ST e do IPI serão destacados na Observação do Livro Fiscal, considerar:
+-- 1.2.1) Se o ((vl_operacao - vl_imp_trib_ipi) = vl_base_calc_icms), neste caso desconsiderando o IPI, considerar:
+-- vl_base_outras = vl_base_outra_icms(item 1.1) + vl_imp_trib_icmsst + vl_ipi_nao_recup + vl_imp_trib_ipi
+-- 1.2.2) Não atendendo ao item 1.2.1, considerar:
+-- vl_base_outras = vl_base_outra_icms(item 1.1) + vl_imp_trib_icmsst + vl_ipi_nao_recup
+-- Essas informações refletem nos registros Tp 08 e 10, coluna VL_OUTRAS.
+-- Rotina: pkb_gera_arq_gia_ba.
+--
+-- Em 14/09/2017 - Marcelo Ono.
+-- Redmine  #34652 - Correção no quadro 00, 11 e 49.
+-- Quadro 00 - Corrigido o processo para registrar a apuração consolidada corretamente, de acordo com as opções abaixo:
+-- 3- É estabelecimento consolidado - Empresa filial, número filial CNPJ (juridica.num_filial <> 1) e Escrituração da Filial (empresa.dm_ind_dec_contab = 1);
+-- 2- É estabelecimento consolidador - Empresa matriz, número filial CNPJ (juridica.num_filial = 1) e Escrituração da Matriz (empresa.dm_ind_dec_contab = 0);
+-- 1- Não é apuração consolidada - Caso o cadastro da empresa, não respeite nenhuma das opções anteriores.
+-- Quadro 11 - Corrigido o processo para não gerar os valores de produtos, IPI, despesas acessórias, base de cálculo ICMS, ICMS próprio, devolução de
+-- mercadorias e ressarcimento de ICMS a partir do período de referência Agosto de 2013.
+-- Quadro 49 - Corrigido o processo para exibir uma linha para cada estado.
+-- rotina: pkb_gera_arq_gia_sc.
+--
+-- Em 31/08/2017 - Marcos Garcia
+-- Redmine  #34095 - ERRO DMA - DIFERENÇA QUADRO 11 X QUADRO 13
+-- Aplicado um teste para saber se a informação corrente pertence a nota de emissão própria ou terceiro.
+-- esse teste impacta no cálculo feito para o campo "outras", que será utilizado na montagem do arquivo.
+--
+-- Em 03/08/2017 - Marcos Garcia
+-- Redmine # 33129 - ERRO DMA
+-- Alteração nos cálculos de impostos para o campo "outras".
+-- rotina: pkb_gera_arq_gia_ba.
+--
+-- Em 21/06/2017 - Marcos Garcia
+-- Redmine # 32011 - Processo de geração do arquivo da GIA-RJ
+-- Alteração na rotina PKB_GERA_ARQ_GIA_RJ, montagem do registro 0200.
+--
+-- Em 24/05/2017 - Angela Inês.
+-- Redmine #31391 - Alterar o processo de geração da GIA-RJ - Registro 0200 - Débitos Especiais.
+-- 1) Considerar o tamanho do campo "Descrição complementar" com no máximo 150 caracteres.
+-- 2) Considerar o tamanho dos campos: "Valor complementar 1", "Valor complementar 2", "Valor complementar 3", "Valor complementar 4" e "Valor complementar 5";
+-- com no máximo 120 caracteres.
+-- Rotina: pkb_gera_arq_gia_rj - cursor c_movtos.
+--
+-- Em 10/05/2017 - Angela Inês.
+-- Redmine #30488 - Processo de geração do arquivo da GIA-RJ: PK_GERA_ARQ_GIA.PKB_GERA_ARQ_GIA_RJ.
+-- Processo de geração do arquivo da GIA-RJ: PK_GERA_ARQ_GIA.PKB_GERA_ARQ_GIA_RJ - Cursor c_movtos - dados da apuração do ICMS (primeiro select).
+-- 1) Na montagem do registro 0200, serão informados os valores cujo código de ajuste seja de utilização '5-Débitos Especiais' (ajust_apur_icms_gia/subitem_gia.dm_util=5).
+-- 2) Caso atenda ao item 5.1, considerar como informação para cada campo:
+-- 2.1) SEQOCOR: Sequência da ocorrência - subitem_gia.seq_ocor.
+-- 2.2) VLRLANCTO: Valor do ajuste da apuração - ajust_subapur_icms.vl_aj_apur.
+-- 2.3) DESCRCOMPL: Descrição complementar - Informar o fundamento legal, e se estiver nulo, informar a descrição do código de ajuste - ajust_subapur_icms.flegal ou subitem_gia.descr.
+-- 2.4) VLRCOMPL1: Valor complementar 1 - Informar Complemento de Dados 1, caso não exista, informar o fundamento legal - ajust_apur_icms_gia.compl_dados_1, ou, ajust_subapur_icms.flegal.
+-- 2.5) VLRCOMPL2: Valor complementar 2 - Informar Complemento de Dados 2, caso não exista, informar a descrição da ocorrência - ajust_apur_icms_gia.compl_dados_2, ou, ajust_subapur_icms.descr_ocor.
+-- 2.6) VLRCOMPL3: Valor complementar 3 - Informar Complemento de Dados 3, caso não exista, informar nulo - ajust_apur_icms_gia.compl_dados_3, ou, Null.
+-- 2.7) VLRCOMPL4: Valor complementar 4 - Informar nulo - Null.
+-- 2.8) VLRCOMPL5: Valor complementar 5 - Informar nulo - Null.
+-- Rotina: pkb_gera_arq_gia_rj - cursor c_movtos.
+--
+-- Em 08/05/2017 - Leandro Savenhago.
+-- Redmine #30686 - Parâmetros para o DIPAM - Adicionar opção de parametrizar por NCM ou invés de código do item
+-- NA geração do CR30, considerar o NCM se não achar pelo Item.
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 06/10/2016 - Leandro Savenhago.
+-- Redmine #27757 - GIA - SP - Geração da Gia com os dados os dados da Declaração de Exportação.
+-- Considerar o período de geração de NFe para recuperar o "Número do Registro de Exportação"
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 18/01/2017 - Angela Inês.
+-- Redmine #27486 - Correção na montagem do Registro CR=30 do arquivo GIA-SP.
+-- Se o código DIPAM parametrizado por Empresa, CFOP e Item for '2.5-Valor adicionado por fornecimento de energia elétrica distribuído por município paulista
+-- onde esta tenha sido consumida', fazer:
+-- 1) Recuperar o estado e a cidade da empresa que emitiu a nota fiscal (nota_fiscal.empresa_id).
+-- 2) Recuperar o estado do participante/destinatário da nota fiscal (nota_fiscal.pessoa_id).
+-- 3) Se o estado da empresa da nota fiscal for SP e o estado do participante/destinatário for SP, gerar o registro CR30.
+-- 4) Atendendo o item (3), utilizar como código do município o código da cidade da empresa que emitiu a nota fiscal.
+-- 5) Atendendo o item (3), utilizar como valor, '1,00' para cada nota fiscal.
+-- 6) Não atendendo o item (3), o registro CR30 não deverá ser gerado porque neste caso, o valor seria zerado.
+-- Se o código DIPAM parametrizado por Empresa, CFOP e Item não for '2.5-Valor adicionado por fornecimento de energia elétrica distribuído por município paulista
+-- onde esta tenha sido consumida', recuperar para o código do município, o código da cidade da empresa que emitiu a nota fiscal, e utilizar para o valor, o valor
+-- do item bruto da nota fiscal.
+-- O registro CR30 não deve ser informado com valor 0(zero) para qualquer situação.
+-- Rotina: pkb_gera_arq_gia_sp
+--
+-- Em 16/01/2017 - Angela Inês.
+-- Redmine #27385 - Alterar Registro 0230-Montagem de Movimentações de saída para ZFM/ALC - GIA-RJ.
+-- Além de verificar se o participante da Nota Fiscal Mercantil, de Serviço e Serviço Contínuo, é pessoa Jurídica e possui CNPJ, passar a considerar também se o
+-- número da inscrição do SUFRAMA está informado, ou seja, possui valor no cadastro, para compôr o Registro 0230-Movimentações de saída para ZFM/ALC.
+-- Rotina: pkb_gera_arq_gia_rj.
+--
+-- Em 10/01/2017 - Angela Inês.
+-- Redmine #27165 - GIA-SP - Montagem do Registro CR=30 - DIPAM-B.
+-- Para a montagem do Registro CR=30, deverá ser enviado o valor "1,00" para o arquivo quando a cidade do participante da nota for São Paulo e utiliza como código
+-- da cidade o valor "1004". Para as cidades do estado de São Paulo, deverá ser informado o valor do item da nota.
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 06/12/2016 - Angela Inês.
+-- Redmine #26059 - Correção na geração da DAPI-MG - Campos 74 e 74.1/125.
+-- Acumular os valores de ajustes da Apuração do ICMS no campo 74.1/125, quando a utilização do código de ajuste for 0-outros débitos (dm_util=0).
+-- Rotina: pkb_gera_arq_gia_mg.
+--
+-- Em 28/11/2016 - Angela Inês.
+-- Redmine #25809 - Correção na geração da DAPI-MG.
+-- Ao somar os valores das linhas acumuladoras, verificar os resultados pois não está sendo considerado os centavos.
+-- Corrigir a multiplicação por 100 dos valores acumulados devido ao campo do arquivo não considerar "vírgula".
+-- Rotina: pkb_gera_arq_gia_mg.
+--
+-- Em 17/11/2016 - Angela Inês.
+-- Redmine #25480 - Corrigir os totalizadores para os valores da Linha 125.
+-- 1) Somar na linha 75, o valor da linha 125.
+-- 2) Somar na linha 94, o valor da linha 75 (novo valor da linha 125).
+-- 3) Somar na linha 96, o valor da linha 94 (novo valor da linha 125).
+-- 4) Subtrair na linha 92, o valor da linha 96 (novo valor da linha 125).
+-- Rotina: pkb_gera_arq_gia_mg.
+--
+-- Em 11/11/2016 - Angela Inês.
+-- Redmine #25327 - Alterar o tamanho do campo FONE para o tipo de registro Contribuinte - GIA-RS.
+-- Rotina: pkb_gera_arq_gia_rs.
+-- Redmine #25336 - Atualização da montagem do arquivo DAPI - MG - ICMS/DIFAL.
+-- 1) Informar número 124 correspondente ao valor do Campo 71.1 (quadro VI): valor do ajuste de icms/difal e utilização como sendo outros créditos (dm_util=2).
+-- 2) Informar número 125 correspondente ao valor do Campo 74.1 (quadro VI): valor do ajuste de icms/difal e utilização como sendo outros débitos (dm_util=0).
+-- Rotina: pkb_gera_arq_gia_mg.
+--
+-- Em 10/11/2016 - Angela Inês.
+-- Redmine #25287 - Atualização da montagem do arquivo DAPI - MG.
+-- Incluir os novos valores no registro 10, versões 8.00.00 e 8.02.00:
+-- 1) Informar número 123 correspondente ao valor do Campo 104.1 (quadro IX): valor 0(zero).
+-- 2) Informar número 124 correspondente ao valor do Campo 71.1 (quadro VI): valor do ajuste de icms quando o código de ajuste for de apuração DIFAL e utilização como sendo outros créditos ou estornos de débitos.
+-- 3) Informar número 125 correspondente ao valor do Campo 74.1 (quadro VI): valor do ajuste de icms quando o código de ajuste for de apuração DIFAL e utilização como sendo outros débitos.
+-- 4) Informar número 126 correspondente ao valor do Campo 77.1 (quadro VII): valor 0(zero).
+-- 5) Informar número 127 correspondente ao valor do Campo 98.1 (quadro VIII): valor 0(zero).
+-- 6) Informar número 128 correspondente ao valor do Campo 82.2 (quadro VII): valor 0(zero).
+-- 7) Informar número 129 correspondente ao valor do Campo 105.2 (quadro IX): valor 0(zero).
+-- Rotina: pkb_gera_arq_gia_mg.
+--
+-- Em 06/10/2016 - Angela Inês.
+-- Redmine #24132 - Correção na montagem da DAPI-MG.
+-- Alterar o campo "DAPI com movimento" da posição 50 da primeira linha do registro 00, considerando 'S', com movimento, se houver informação nos campos de
+-- valores dos registros: 10, 22, 23, 27 e 29. Caso não tenha informação nos campos de valores, será considerado 'N', sem movimento.
+-- Rotina: pkb_gera_arq_gia_mg.
+--
+-- Em 08/08/2016 - Angela Inês.
+-- Redmine #22170 - Correção na geração da GIA-SP. Registro CR-18.
+-- Identificar se o Destinatário da Nota Fiscal é contribuinte ou não de ICMS, utilizando o parâmetro do destinatário - nota_fiscal_dest.dm_ind_ie_dest, e se o
+-- parâmetro indicar 9-Não Contribuinte, o mesmo não deverá estar informado no registro CR18-ZFM/ALC.
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 04/07/2016 - Angela Inês.
+-- Redmine #19800 - Mensagem na GIA.
+-- A correção que foi feita na ficha #18959 essa mensagem de log só aparece qdo é validado a GIA, depois que parte para o outro processo de gerar o arquivo,
+-- esse log é apagado. Verificar a possibilidade de deixar o log mesmo depois que é gerado o arquivo.
+-- Rotina: pkb_geracao.
+--
+-- Em 22/06/2016 - Angela Inês.
+-- Redmine #20495 - Geração da GIA.
+-- O processo que identifica se existe Apuração de ICMS processada na data da geração da gia estava incorreto.
+-- Rotina: pkb_validar.
+--
+-- Em 16/06/2016 - Angela Inês.
+-- Redmine #20313 - Correção na GIA - Documentos Cancelados.
+-- Não considerar os cupons fiscais eletrônicos (CF-e modelo 59), cancelados para geração dos valores da GIA.
+-- Rotina: pkb_gera_arq_gia_sp - cursor c_cfe_cfop.
+--
+-- Em 16/05/2016 - Angela Inês.
+-- Redmine #18959 - Correção na validação da geração da GIA.
+-- Quando o log gerado na validação da GIA for do tipo "Informação", não alterar a situação da GIA para "Erro de validação", manter como "Validada".
+-- Rotina: pkb_validar.
+--
+-- Em 12/04/2016 - Angela Inês.
+-- Redmine #17518 - Correção na geração da GIA-SP. Registro CR-14.
+-- De acordo com o layout do Governo, os campos VALOR_CONTABIL_2 e BASE_CALCULO_2, do registro CR14-Operações Interestaduais, se referem aos valores
+-- de documentos fiscais de CFOP com início 6, e que os participantes sejam NÃO-CONTRIBUINTES.
+-- Para identificar se o participante é NÃO-CONTRIBUINTE, é necessário verificar o parâmetro relacionado com o destinatário do documento fiscal
+-- (nota_fiscal_dest.dm_ind_ie_dest: 1-Contribuinte ICMS (informar a IE do destinatário), 2-Contribuinte isento de Inscrição no cadastro de Contribuintes do ICMS,
+-- e 9-Não Contribuinte, que pode ou não possuir Inscrição Estadual no Cadastro de Contribuintes do ICMS). Caso o documento fiscal não possua o indicador no
+-- destinatário, essa informação será recuperada da inscrição estadual do cadastro do participante. Ainda não encontrando, o participante será considerado como
+-- Contribuinte. Considerar como NÃO-CONTRIBUINTE se o parâmetro estiver como: 9-Não Contribuinte, que pode ou não possuir Inscrição Estadual no Cadastro de
+-- Contribuintes do ICMS.
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 08/04/2016 - Angela Inês.
+-- Redmine #17453 - Correção na geração da GIA-MG-DAPI.
+-- Alterar o valor do campo DAPI_MOVIM para 'S' e não mais 'N' como está hoje.
+-- Rotina: pkb_gera_arq_gia_mg.
+--
+-- Em 11/03/2016 - Angela Inês.
+-- Redmine #16434 - Correção na geração da GIA-SP. Registros CR-10 e CR-14.
+-- Solicitação/Leandro: Identificar se a nota fiscal for de emissão própria (nota_fiscal.dm_ind_emit=0), recuperar o identificador do estado e o identificador da
+-- cidade através do destinatário da nota (nota_fiscal_dest), e caso não exista, recuperar do participante da nota (nota_fiscal.pessoa_id).
+-- Alterar nas versões 269, 270, 271 e 272.
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 02/03/2016 - Angela Inês.
+-- Redmine #16046 - Registro 27 gerando o código ' 2'.
+-- Correção na geração do arquivo, informando 0(zeros) a esquerda.
+-- Rotina: pkb_gera_arq_gia_mg.
+--
+-- Em 19/02/2016 - Angela Inês.
+-- Redmine #15593 - Inclusão dos Valores de Cupom Fiscal Eletrônico na geração da GIA-SP.
+-- Alterar a geração da GIA-SP, para os registros CR10, considerando os valores dos Cupons Fiscais Eletrônicos - Modelo 59.
+-- Rotina: pkb_gera_arq_gia_sp - cursor c_cfe_cfop.
+--
+-- Em 10/02/2016 - Angela Inês.
+-- Redmine #15280 - Atualizar o layout da GIA-RS.
+-- 1) Incluir no registro Principal - Identificador ABCE os campos: 'Fundo Ampara - RS', 'Pgto. Ocorr. Fato Gerador - ICMS Próprio Ampara' e 'Pgto. Ocorr. Fato Gerador - ICMS Subst. Tributária Ampara'. Atribuindo zeros para os campos.
+-- 2) Incluir no registro Anexo VIII - Identificador X08 os campos: 'ICMS Próprio Ampara' e 'ICMS Subst. Tributária Ampara'. Atribuindo zeros para os campos.
+-- 3) Incluir no registro Anexo IX - Identificador X09 os campos: 'ICMS Próprio Ampara' e 'ICMS Subst. Tributária Ampara'. Atribuindo zeros para os campos.
+-- Rotina: pkb_gera_arq_gia_rs
+--
+-- Em 13/01/2016 - Angela Inês.
+-- Redmine #14478 - Validação da GIA-SP.
+-- Na validação da GIA (pk_gera_arq_gia.pkb_validar), ao identificar se existe apuração de ICMS com valores de ajuste, as validações que se referem as
+-- ocorrências da GIA não estão atendendo o necessário.
+-- O processo não está identificando erro de validação quando não existe o registro de ocorrência. Envia erro de validação quando tem o registro de ocorrência
+-- mas não tem IE vinculada ao participante.
+-- Correção: Quando não houver o registro de ocorrência (icms_ocor_gia_ie), enviar erro de validação.
+-- Rotina: pkb_validar.
+--
+-- Em 12/01/2016 - Angela Inês.
+-- Redmine #14435 - Geração do Arquivo DAPI - GIA-MG.
+-- Na recuperação dos valores de Ressarcimento, considerar o valor 2-Abatimento de ICMS ST por RE (fixo) como motivo de ressarcimento, e considerar
+-- somente os registros com valor do ICMS-ST for maior que zero.
+-- Rotina: pkb_gera_arq_gia_mg.
+--
+-- Em 21/12/2015 - Leandro Savenhago.
+-- Redmine #13757 - Validação de Ocorrência da GIA
+-- Rotina: pkb_validar
+--
+-- Em 12/12/2015 - Leandro Savenhago.
+-- Redmine #10846 - Validação da GIA-RJ
+-- Rotina: pkb_validar
+--
+-- Em 12/11/2015 - Angela Inês.
+-- Redmine #12868 - Montagem da GIA-SP - Registro CR10.
+-- Identificar se os valores para o registro CR10 são maiores que zero, para serem gerados.
+-- Na validação do arquivo não é permitido gerar o registro somente com o Tipo e a CFOP.
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 14/10/2015 - Angela Inês.
+-- Redmine #12081 - RAZÃO SOCIAL DA EMPRESA ERRADA NA DIME-(GIA-SC).
+-- Alterado conforme o consultor BISPO.
+-- Rotina: pkb_gera_arq_gia_sc - coluna nom_contr - considerar somente 50 caracteres.
+--
+-- Em 02/10/2015 - Angela Inês.
+-- Redmine #11980 - Correção na geração da GIA-SC.
+-- Recuperar o nome da empresa relacionada a GIA-SC no registro 21, campo Nome do Contribuinte.
+-- Rotina: pkb_gera_arq_gia_sc.
+--
+-- Em 27/08/2015 - Angela Inês.
+-- Redmine #11222 - Correção na geração da GIA-MG.
+-- Alterar o processo de recuperação dos dados da apuração do ICMS. O mesmo não está considerando o valor de saldo credor anterior da apuração.
+-- Rotina: pkb_gera_arq_gia_mg - cursor c_apur_icms: Linha 87.
+--
+-- Em 14/08/2015 - Angela Inês.
+-- Redmine #10117 - Escrituração de documentos fiscais - Processos.
+-- Inclusão do novo conceito de recuperação de data dos documentos fiscais para retorno dos registros.
+--
+-- Em 13/08/2015 - Angela Inês.
+-- Redmine #10679 - Correção na montagem do registro CR18 - GIA-SP.
+-- Os valores gerados para o registro CR18-ZFM/ALC devem acumular o VALOR por nota. Caso a nota possua mais de um item, o valor de cada item deve ser somado.
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 30/07/2015 - Angela Inês.
+-- Redmine #10117 - Escrituração de documentos fiscais - Processos.
+-- Inclusão do novo conceito de recuperação de data dos documentos fiscais para retorno dos registros.
+--
+-- Em 08/07/2015 - Angela Inês.
+-- Redmine #9933 - Correção na geração do arquivo GIA-RJ - Valores do Imposto ICMS-ST.
+-- Correção no processo que armazena os valores do imposto ICMS-ST: Somar o valor das bases de cálculo de ICMS-ST e o valor do imposto ICMS-ST.
+-- Caso a soma das bases ou a soma do imposto for maior que zero, considerar que o arquivo possui movimento de imposto ICMS-ST informando no registro 0110 - campo IndSemMovST = 'N'.
+-- Essa correção deverá ser efetuada nas versões 266, 267 e 268; e, alterar o FTP na versão 266.
+-- Rotina: pkb_gera_arq_gia_rj - registros 0110, 0120 e 0130.
+--
+-- Em 11/06/2015 - Rogério Silva.
+-- Redmine #8226 - Processo de Registro de Log em Packages - LOG_GENERICO
+--
+-- Em 02/04/2015 - Angela Inês.
+-- Redmine #7429 - Correção na GIA-SP - Valor Substituto e Substituído de Notas Fiscais.
+-- 1) Considerar Valor Substituto de ST as notas fiscais de emissão própria.
+-- 2) Considerar Valor Substituto de ST as notas fiscais de terceiro com operação de entrada e CFOP com tipo de operação devolução.
+-- 3) Considerar Valor Substituído de ST as notas fiscais de terceiro.
+-- 4) Montagem do registro CR-07: Correção na recuperação da apuração do icms-st, considerando somente as apurações do estado de SP.
+-- Rotina: pkb_gera_arq_gia_sp
+--
+-- Em 20/03/2015 - Angela Inês.
+-- Redmine #7160 - Correção na geração da GIA-SP.
+-- Cancelar a nova função (fkg_vlr_icmsst_conf_cfop_sp). Manter a recuperação dos valores de acordo com a CFOP conforme função anterior (fkg_vlr_icmsst_conf_cfop).
+-- Incluir na regra de Valor Substituto: Nota fiscal de terceiro (nota_fiscal.dm_ind_emit = 1) com CFOP de devolução (cfop.tipooperacao_id / tipo_operacao.cd).
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 19/03/2015 - Angela Inês.
+-- Redmine #7132 - Geração GIA (MANIKRAFT).
+-- Correção na recuperação dos valores de ICMS-ST para os registros CR10 e CR14.
+-- Criação da função: fkg_vlr_icmsst_conf_cfop_sp.
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 26/02/2015 - Angela Inês.
+-- Redmine #6614 - Correção na geração da GIA - SP.
+-- Ao importar o arquivo da GIA está sendo exibido um erro de validação referente ao número do CNAE, Tabela 2, registro 05, no layoute está indicando
+-- que o campo deve ser zerado. Segue anexo o print do erro.
+-- Correção: Passar a não recuperar o código CNAE da empresa para montagem do registro CR05. Gerar a informação com 0000000.
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 09/10/2014 - Angela Inês.
+-- Redmine #4761 - Erro ao validar GIA SP (TENDÊNCIA). Alterar geração do registro CR=07.
+-- Erro ao validar GIA SP (TENDÊNCIA). Alterar geração do registro CR=07.
+-- 1) Deverá ser informado no máximo 10 linhas para o registro CR=07, sendo 5 para Operações Próprias e 5 para Operações de ST.
+-- Foi criado uma nova variável para fazer o contador de registros.
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 09/10/2014 - Angela Inês.
+-- Redmine #4752 - Alteração layout GIA RS (TENDÊNCIA) - Novo layout.
+-- 1) Adaptar o novo layout de acordo com documento do governo.
+-- 2) Correção nos dados do anexo/registro de Contribuinte - campo código de entrega da gia.
+-- Rotina: pkb_gera_arq_gia_rs.
+--
+-- Em 25/07/2014 - Angela Inês.
+-- Redmine #3618 - Verificar os processos de GIA com relação a conferência de valores e Apuração de ICMS - Leandro/Barcelos - Chamado 572.
+-- Implementar validação geral da GIA, que verifica se existe período de Apuração de ICMS com o mesmo período da Geração da GIA, para Geração do arquivo.
+-- Rotina: pkb_geracao.
+--
+-- Em 15/07/2014 - Angela Inês.
+-- Redmine #3447 - GIA-ES: arquivo com erro de estrutura.
+-- Gerar o registro tipo 4 com os valores zerados se não houver obrigações de pagamentos vinculados a apuração do icms.
+-- Rotina: pkb_gera_arq_gia_es.
+--
+-- Em 16/06/2014 - Angela Inês.
+-- Redmine #3109 - Suporte - Aline/Adidas.
+-- Corrigir o processo com relação a montagem da GIA-SP dos registros CR25, CR26, CR27 e CR28, de acordo com os Sub-Itens informados nas Ocorrências.
+-- Rotina: pkb_gera_arq_gia_sp.
+--
+-- Em 26/05/2014 - Angela Inês.
+-- Redmine #2913 - Processo de Geração da GIA-RJ - Implementar a geração dos dados de ajustes, conforme orientado na tarefa #2436.
+-- Rotina: pkb_gera_arq_gia_rj - cursor c_movtos.
+--
+-- Em 11/03/2014 - Angela Inês.
+-- Correção na recuperação dos dados do contador e representante da empresa - tipo de registro Tp110 - GIA-RJ.
+-- Redmine #2278 - Geração da GIA-SP, registro CR07 incorreto.
+-- Alterações:
+-- 1) No processo de montagem do arquivo CR07 não deve ser zerado o indexador que agrupa as apurações de icms e depois icms-st (j).
+-- 2) No processo de montagem do arquivo CR10 considerar o valor de imposto substituto para emissão própria, e imposto substituído para terceiros.
+-- 3) No processo de montagem do arquivo CR14 considerar o valor de imposto outros para CFOPs de início 2, e imposto icms cobrado st para CFOPs de início 6.
+--
+-- Em 26/12/2013 - Angela Inês.
+-- Redmine #1642 - Correção na GIA-RJ.
+-- 1) Utilizar a função que converte as descrições dos registros 0140, 0150, 0160, 0170, 0180, 0190, 0200.
+-- 2) Valores das descrições complementares dos registros 0140, 0150, 0160, 0170, 0180 e 0200.
+--    Coluna: Descrição Complementar - considerar o campo "Descrição do Sub-Item GIA" - Para todos os tipos de registros - subitem_gia.descr.
+--    Coluna: Valor Complementar 1 - ajust_apur_icms_gia.flegal.
+--    Coluna: Valor Complementar 2 - ajust_apur_icms_gia.descr_ocor.
+--
+-- Em 16/12/2013 - Angela Inês.
+-- Redmine #1616 - Processo GIA-SP. Estouro de índica para montagem dos dados CR18.
+-- Identificador da nota fiscal passou de 10 caracteres: alteramos o processo para considerar os 10 últimos dígitos.
+--
+-- Em 11/12/2013 - Angela Inês.
+-- Eliminado as funções de validações.
+-- Rotina: pkb_validar.
+--
+-- Em 26/09/2013 - Angela Inês.
+-- Redmine #991 - GIA - MS.
+-- Correção na geração do registro 00, dados sobre gia retificadora.
+-- Rotina: pkb_gera_arq_gia_ms.
+--
+-- Em 12/09/2013 - Angela Inês.
+-- Redmine #673 - GIA - RS.
+-- Os valores do imposto ICMS-ST de CFOP com início 6 não devem fazer parte do anexo VII.B, segundo processo da GIA-RS.
+-- Correção no tamanho do arquivo XDC, os campos que estão nulos devem ser preenchidos com espaço ou zeros, dependendo do tipo de cada um.
+-- Rotina: pkb_gera_arq_gia_rs.
+--
+-- Em 07/08/2013 - Angela Inês.
+-- Redmine #451 - Validação de informações Fiscais.
+-- Inclusão do processo de validação das notas fiscais, dos conhecimentos de transporte e dos cupons fiscais.
+-- Rotina: pkb_validar.
+--
+-- Em 24/06/2013 - Angela Inês.
+-- RC #303 - Validação de informações Fiscais - Ficha HD 66733.
+-- Alterar o processo de Validar, gerando log de informação para os processos que estão com participantes indevidos conforme CFOP, independente do parâmetro
+-- dm_valida_cfop_estado estar habilitado ou não. O processo irá validar sendo necessário verificar/clicar no botão de Log se houve ou não a inconsistência.
+--
+-- Em 21/05/2013 - Angela Inês.
+-- Correção no processo de GIA-RJ - cursor que recupera os movimentos de apuração de icms.
+-- Rotina: pkb_gera_arq_gia_rj.
+--
+-- Em 25/04/2013 e 07/05/2013 - Angela Inês.
+-- Ficha HD 66588 - Correções no processo da Gia do RJ.
+-- 1) Implementar os códigos de ocorrência referente aos registros de apuração do ICMS.
+-- 2) Correção nos valores somados para o total no último registro do arquivo - 9999.
+-- Rotina: pkb_gera_arq_gia_rj, pkb_gera_arq_gia_ms e pkb_gera_arq_gia_sp.
+--
+-- Em 05/02/2013 - Angela Inês.
+-- Ficha HD 65524 - Correção das GIAs - RN, SC, PR; Criação da GIA - ES; e, Correção das GIAs no geral em todos os processos.
+--
+-- Em 10/01/2013 - Angela Inês.
+-- Ficha HD 65524.
+-- 1) Durante um teste na Gia do PR deu o erro na package. Comando incorreto: vv_dt_ref := to_number(rec.dt_emiss,'RRRRMM');
+--
+-- Em 06/12/2012 - Angela Inês.
+-- Ficha HD 64424 - Ao realizar os testes foram apresentados erros no arquivo, em anexo envio log de erros do validador da GIA RJ.
+-- Correção da recuperação de registros interestaduais, considerando o código 33 para o Rio de Janeiro.
+--
+-- Em 23/08/2012 - Angela Inês.
+-- 1) Inclusão do processo de montagem dos registros referente a GIA-RJ.
+--
+-- Em 02-03/08/2012 - Angela Inês.
+-- 1) Incluir na recuperação das notas fiscais, conhecimentos de transporte e cupons fiscais o processo que recupera os valores
+--    dos impostos em rotina única, e considerar o valor do imposto ipi não recuperado e outros impostos na coluna de outros impostos.
+--    Rotinas: pk_csf_api.pkb_vlr_fiscal_item_nf e pkb_vlr_fiscal_nfsc, pk_csf_api_ecf.pkb_vlr_fiscal_ecf e pk_csf_api_d100.pkb_vlr_fiscal_ct_d100.
+--
+-- Em 19/07/2012 - Angela Inês.
+-- 1) Eliminar os pontos no campo que se refere ao código DIPAM para o registro CR30.
+--    Rotina: pkb_gera_arq_gia_sp.
+--
+---------------------------------------------------------------------------------------------------------------------------
+   --
+   type t_estr_arq_gia is table of estr_arq_gia%rowtype index by binary_integer;
+   vt_estr_arq_gia t_estr_arq_gia;
+   --
+   gl_conteudo           estr_arq_gia.conteudo%type;
+   g2_conteudo           estr_arq_gia.conteudo%type;
+   gv_tipocodarq_cd      tipo_cod_arq.cd%type;
+   gn_tipocodarq_id      tipo_cod_arq.id%type;
+   gn_dm_dt_escr_dfepoe  empresa.dm_dt_escr_dfepoe%type;
+   gn_origem_dado_pessoa number;   
+   --
+   gt_row_abertura_gia   abertura_gia%rowtype;
+   gn_dm_situacao        abertura_gia.dm_situacao%type;
+   --
+   gv_mensagem           log_generico.mensagem%type;
+   gv_resumo             log_generico.resumo%type;
+   gv_obj_referencia     Log_Generico.obj_referencia%type default 'ABERTURA_GIA';
+   gn_referencia_id      Log_Generico.referencia_id%type := null;
+   --
+   gv_num_tare           varchar2(20);
+   gv_dt_vencimento      varchar2(8);
+   --
+   erro_de_validacao     constant number := 1;
+   erro_de_sistema       constant number := 2;
+   informacao            constant number := 35;
+   --
+-------------------------------------------------------------------------------------------------------
+/*
+ Todos os registros devem conter no final de cada linha do arquivo digital, após o caractere delimitador
+ Pipe acima mencionado, os caracteres "CR" (Carriage Return) e "LF" (Line Feed) correspondentes a
+ "retorno do carro" e "salto de linha" (CR e LF: caracteres 13 e 10, respectivamente, da Tabela ASCII).
+*/
+   --
+   cr             constant varchar2(4000) := chr(13);
+   lf             constant varchar2(4000) := chr(10);
+   final_de_linha constant varchar2(4000) := cr || lf;
+   --
+-------------------------------------------------------------------------------------------------------
+-- Procedimento de geração do arquivo
+procedure pkb_geracao(en_aberturagia_id in abertura_gia.id%type);
+
+-------------------------------------------------------------------------------------------------------
+-- Procedimento de desfazer a situação da geração da GIA
+procedure pkb_desfazer(en_aberturagia_id in abertura_gia.id%type);
+
+-------------------------------------------------------------------------------------------------------
+-- Procedimento para validar os dados para geração da GIA
+procedure pkb_validar(en_aberturagia_id in abertura_gia.id%type);
+
+-------------------------------------------------------------------------------------------------------
+-- Procedimento para geração dos registros para geração da DIME
+procedure pkb_gera_reg_dime(en_aberturagia_id in abertura_gia.id%type);
+
+-- Procedimento para validar os dados para geração da DIME
+procedure pkb_validar_dime(en_aberturagia_id in abertura_gia.id%type);
+
+-- Procedimento para geração dos registros de informações complementares para geração da DIME
+procedure pkb_gera_reg_dime_comp(en_infcompdime_id in inf_comp_dime.id%type);
+
+-- Procedimento para cálculo dos registros de informações complementares para geração da DIME
+procedure pkb_calc_dime_comp(en_infcompdime_id in inf_comp_dime.id%type);
+
+-- Procedimento de desfazer a situação das informações complementares da geração da DIME
+procedure pkb_desfazer_comp(en_infcompdime_id in inf_comp_dime.id%type);
+
+-------------------------------------------------------------------------------------------------------
+
+end pk_gera_arq_gia;
+/
