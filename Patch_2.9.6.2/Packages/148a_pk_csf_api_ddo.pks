@@ -2,6 +2,7 @@ create or replace package csf_own.pk_csf_api_ddo is
 --
 -- Especificação do pacote de integração do Bloco F a partir de leitura de views
 --
+--
 -- Em 01/02/2021   - Eduardo Linden 
 -- Redmine #75495  - Erro na integração de registros F120, incluir o campo chave
 -- Rotina alterada - pkb_integr_bemativimobopcredpc -> Inclusão do campo  dm_ident_bem_imob na busca de id da tabela bem_ativ_imob_oper_cred_pc  
